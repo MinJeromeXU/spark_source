@@ -1,9 +1,11 @@
-shuffle的实现)有writer和read
+**shuffle的实现有writer和read**
         主要看两种不同的writer(ByPassMergeSortShuffleWriter和SortShuffleWriter)
 writer的操作发生在ShuffleMapTask.runTask操作中
-            ByPassMergeSortShuffleWriter:
+
+            **ByPassMergeSortShuffleWriter:**
 将每个分区对应的输出数据写入到一个小文件中(每个分区对应一个writer)，然后合并所有的小文件构成一个数据文件并返回一个大小为分区个数的数组，数组中存放的是小文件的大小，根据小文件的大小构建一个索引文件。索引文件存放的是offset,每迭代一次就将offset加上数组中文件的大小，主要两个offset之差就是一个数据文件的大小。
-            SortShuffleWriter:
+
+            **SortShuffleWriter:**
 将每个分区的数据先写入到内存中，如果内存不够就在写入到磁盘中，然后在合并内存和磁盘的数据到一个数据文件中，并构建数据索引文件。具体步骤：首先根据是否需要map端聚合生产两种不同的ExternalSorter，然后调用ExternalSorter的insertAll方法实现数据的存储。在insertAll方法内部首先判断是否需要聚合，需要聚合生成的数据结构PartitionAppendOnlyMap，构建一个update函数执行聚合操作；
 不需要聚合使用的数据结构是PartitionPairBuffer。
 先看聚合怎么做的：需要聚合调用的是map的changeValue方法每次利用update函数迭代更新map的数据。map数据存放的格式是一个key后面紧接着一个value值（键值对是成对出现的）（2*n，2*n+1）；并且真的分区的每条数据更新操作都需要判断是否需要溢写数据到文件中maybeSpillCollection.溢写操作首先预估内存是否够用（默认初始化内存是5M），够用就执行update操作。不够用就溢写到文件中，然后重新创建一个map存放数据，原来的map内存释放掉；内存预估的逻辑是通过采用预估每次采用增加的多少内存乘以本次操作更新的多少次得到本次需要增加的内存加上以及占有的内存是否大于阈值（5m）如果大于5M则就发送溢写操作。溢写操作首先构建一个迭代器，构建迭代器的时候将map的数据让其紧挨着（因为map存放数据的时候hash对应的值并一定是挨着的），然后做一次二分排序，只够创建一个数据流（key,value）排序的比较器是partitionKey比较器（有两种不同的比较器对应不同的数据结构map,buffer）。迭代器构建完成之后就是开始溢写文件。将所有分区的文件以及内存数据合并到一个文件中，构建一个分区迭代器（之前的数据迭代器只是不同分区进行的排序）。首先读取分区Id为0的数据，（内部维护一个本次读取的分区号和下一次读取的分区号）在返回数据之间记录该分区读取到的数据条数.返回的是一个（分区。分区对应的迭代器）。然后一个数组和ByPassMergeSortShuffleWriter一样。构建索引文件。
